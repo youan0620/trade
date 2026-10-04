@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>期貨交易模型 - 歷史行情與風報比規劃器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4 md:p-8">
+
+<div id="app" class="max-w-4xl mx-auto space-y-6">
+    <!-- 頁頭與歷史行情摘要 -->
+    <header class="bg-slate-800 p-6 rounded-2xl border border-slate-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-emerald-400">期貨戰略交易模型</h1>
+            <p class="text-xs text-slate-400 mt-1">台指期歷史行情整合 & 風險報酬比率規劃</p>
+        </div>
+        
+        <!-- 歷史行情面板 -->
+        <div class="bg-slate-900 p-3 rounded-xl border border-slate-700 w-full md:w-auto text-sm">
+            <div class="flex justify-between items-center gap-4">
+                <span class="text-slate-400">歷史日K資料 (昨日結算):</span>
+                <button @click="fetchHistoryData" class="text-xs bg-emerald-600 hover:bg-emerald-500 px-2 py-1 rounded transition">載入/更新</button>
+            </div>
+            <div v-if="historyPrice" class="mt-2 grid grid-cols-3 gap-2 font-mono text-center text-xs">
+                <div><span class="text-slate-400">收盤:</span> <span class="text-emerald-400 font-bold">{{ historyPrice.close }}</span></div>
+                <div><span class="text-slate-400">最高:</span> {{ historyPrice.max }}</div>
+                <div><span class="text-slate-400">最低:</span> {{ historyPrice.min }}</div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 模式切換頁籤 -->
+    <div class="flex border-b border-slate-700 space-x-4">
+        <button @click="mode = 'calc'" :class="['pb-2 text-sm font-semibold transition', mode === 'calc' ? 'border-b-2 border-emerald-400 text-emerald-400' : 'text-slate-400']">
+            1. 正向風報比試算
+        </button>
+        <button @click="mode = 'recommend'" :class="['pb-2 text-sm font-semibold transition', mode === 'recommend' ? 'border-b-2 border-emerald-400 text-emerald-400' : 'text-slate-400']">
+            2. 期望風報比反推出場點
+        </button>
+    </div>
+
+    <!-- 基礎參數：方向與合約 -->
+    <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 grid grid-cols-2 gap-4">
+        <div>
+            <label class="block text-xs text-slate-400 mb-1">交易方向</label>
+            <select v-model="direction" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm">
+                <option value="long">做多 (Long)</option>
+                <option value="short">做空 (Short)</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs text-slate-400 mb-1">期貨商品種類</label>
+            <select v-model="multiplier" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm">
+                <option :value="10">微型台指 (10元/點)</option>
+                <option :value="50">小型台指 (50元/點)</option>
+                <option :value="200">大型台指 (200元/點)</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- 模式 1：正向風報比試算 -->
+    <div v-if="mode === 'calc'" class="grid md:grid-cols-2 gap-6">
+        <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-4">
+            <h2 class="text-lg font-semibold text-slate-200">輸入交易計畫點位</h2>
+            
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">預估進場區間</label>
+                <div class="flex items-center gap-2">
+                    <input type="number" v-model.number="entryLow" placeholder="下限" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-center">
+                    <span>-</span>
+                    <input type="number" v-model.number="entryHigh" placeholder="上限" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-center">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">實際進場點位</label>
+                <input type="number" v-model.number="actualEntry" class="w-full bg-slate-900 border border-emerald-500/50 rounded-lg p-2.5 font-bold text-emerald-400 text-center">
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">預期出場點位</label>
+                    <input type="number" v-model.number="exitTarget" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-center text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">停損點位</label>
+                    <input type="number" v-model.number="stopLoss" class="w-full bg-slate-900 border border-rose-500/50 rounded-lg p-2 text-center text-rose-400 font-semibold text-sm">
+                </div>
+            </div>
+        </div>
+
+        <!-- 試算結果 -->
+        <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 flex flex-col justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-200 mb-4">風險報酬評估</h2>
+                <div class="bg-slate-900 p-4 rounded-xl border border-slate-700 text-center">
+                    <span class="text-xs text-slate-400">風報比 (Risk : Reward)</span>
+                    <div class="text-4xl font-extrabold my-2" :class="rrRatioClass">{{ rrRatio }}</div>
+                </div>
+
+                <div class="mt-4 space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-slate-400">預期獲利:</span>
+                        <span class="text-emerald-400 font-bold">+${{ profitAmount.toLocaleString() }} ({{ profitPoints }}點)</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-400">最大潛在虧損:</span>
+                        <span class="text-rose-400 font-bold">-${{ Math.abs(lossAmount).toLocaleString() }} ({{ lossPoints }}點)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模式 2：反向建議出場點 -->
+    <div v-if="mode === 'recommend'" class="grid md:grid-cols-2 gap-6">
+        <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-4">
+            <h2 class="text-lg font-semibold text-slate-200">設定預期條件</h2>
+            
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">計畫進場區間</label>
+                <div class="flex items-center gap-2">
+                    <input type="number" v-model.number="recEntryLow" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-center">
+                    <span>-</span>
+                    <input type="number" v-model.number="recEntryHigh" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-center">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">停損點位</label>
+                <input type="number" v-model.number="recStopLoss" class="w-full bg-slate-900 border border-rose-500/50 rounded-lg p-2 text-rose-400 font-semibold text-center text-sm">
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">期望目標風報比 (R:R)</label>
+                <input type="number" step="0.1" v-model.number="targetRR" class="w-full bg-slate-900 border border-emerald-500/50 rounded-lg p-2 text-emerald-400 font-bold text-center text-sm">
+            </div>
+        </div>
+
+        <!-- 點位建議輸出 -->
+        <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-4">
+            <h2 class="text-lg font-semibold text-slate-200">建議停利出場點位</h2>
+            
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-700 space-y-3">
+                <div>
+                    <div class="text-xs text-slate-400">最低滿足目標點位 (以此區間內最差點位計算)</div>
+                    <div class="text-xl font-bold text-emerald-400 font-mono">{{ suggestedExitMin }} 點</div>
+                </div>
+                <hr class="border-slate-800">
+                <div>
+                    <div class="text-xs text-slate-400">最佳獲利目標點位 (以此區間內最佳點位計算)</div>
+                    <div class="text-xl font-bold text-emerald-300 font-mono">{{ suggestedExitMax }} 點</div>
+                </div>
+            </div>
+
+            <p class="text-xs text-slate-400 leading-relaxed">
+                * 註：當市場達到上述點位時，即使您在區間內最不利的位置成交，該筆交易也能確保達到至少 {{ targetRR }} 的風險報酬比。
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, computed } = Vue;
+
+createApp({
+    setup() {
+        const mode = ref('calc');
+        const direction = ref('long');
+        const multiplier = ref(10); // 微台預設 10元/點
+        const historyPrice = ref(null);
+
+        // 試算模式變數
+        const entryLow = ref(40000);
+        const entryHigh = ref(40500);
+        const actualEntry = ref(40100);
+        const exitTarget = ref(42000);
+        const stopLoss = ref(39500);
+
+        // 反推模式變數
+        const recEntryLow = ref(40000);
+        const recEntryHigh = ref(40500);
+        const recStopLoss = ref(39500);
+        const targetRR = ref(3.0);
+
+        // 載入 FinMind 歷史資料範例
+        const fetchHistoryData = async () => {
+            try {
+                // 抓取近 5 天日 K 資料範例
+                const res = await fetch('https://api.finmindtrade.com/api/v4/data?dataset=TaiwanFuturesDaily&data_id=TX&start_date=2024-01-01');
+                const data = await res.json();
+                if(data.data && data.data.length > 0) {
+                    const last = data.data[data.data.length - 1];
+                    historyPrice.value = {
+                        close: last.close,
+                        max: last.max,
+                        min: last.min
+                    };
+                }
+            } catch (err) {
+                alert('載入歷史數據失敗，請稍後再試。');
+            }
+        };
+
+        // 正向計算邏輯
+        const profitPoints = computed(() => {
+            if (!actualEntry.value || !exitTarget.value) return 0;
+            return direction.value === 'long' ? exitTarget.value - actualEntry.value : actualEntry.value - exitTarget.value;
+        });
+
+        const lossPoints = computed(() => {
+            if (!actualEntry.value || !stopLoss.value) return 0;
+            return direction.value === 'long' ? actualEntry.value - stopLoss.value : stopLoss.value - actualEntry.value;
+        });
+
+        const profitAmount = computed(() => profitPoints.value * multiplier.value);
+        const lossAmount = computed(() => lossPoints.value * multiplier.value);
+
+        const rrRatio = computed(() => {
+            if (lossPoints.value <= 0) return '無效/負風險';
+            return ((profitPoints.value / lossPoints.value)).toFixed(2) + ' : 1';
+        });
+
+        const rrRatioClass = computed(() => {
+            const ratio = profitPoints.value / lossPoints.value;
+            if (ratio >= 2.0) return 'text-emerald-400';
+            if (ratio >= 1.0) return 'text-amber-400';
+            return 'text-rose-400';
+        });
+
+        // 反向計算建議點位
+        const suggestedExitMin = computed(() => {
+            if (!recEntryHigh.value || !recStopLoss.value || !targetRR.value) return 0;
+            if (direction.value === 'long') {
+                const risk = recEntryHigh.value - recStopLoss.value;
+                return Math.round(recEntryHigh.value + (risk * targetRR.value));
+            } else {
+                const risk = recStopLoss.value - recEntryLow.value;
+                return Math.round(recEntryLow.value - (risk * targetRR.value));
+            }
+        });
+
+        const suggestedExitMax = computed(() => {
+            if (!recEntryLow.value || !recStopLoss.value || !targetRR.value) return 0;
+            if (direction.value === 'long') {
+                const risk = recEntryLow.value - recStopLoss.value;
+                return Math.round(recEntryLow.value + (risk * targetRR.value));
+            } else {
+                const risk = recStopLoss.value - recEntryHigh.value;
+                return Math.round(recEntryHigh.value - (risk * targetRR.value));
+            }
+        });
+
+        return {
+            mode, direction, multiplier, historyPrice, fetchHistoryData,
+            entryLow, entryHigh, actualEntry, exitTarget, stopLoss,
+            profitPoints, lossPoints, profitAmount, lossAmount, rrRatio, rrRatioClass,
+            recEntryLow, recEntryHigh, recStopLoss, targetRR, suggestedExitMin, suggestedExitMax
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
